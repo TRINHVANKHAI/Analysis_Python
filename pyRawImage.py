@@ -4,6 +4,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+import math
+
 
 width = 1920
 height = 1080
@@ -14,6 +16,34 @@ image_shape = (height, width)
 
 
 pca = PCA(n_components=3)
+
+
+
+
+
+
+Vdirect = np.array([1, 1, 1]) # Target direction
+Xu      = np.array([1, 0, 0]) # X axis unit vector
+
+theta   = math.acos (np.dot(Xu, Vdirect)/(np.linalg.norm(Vdirect)*np.linalg.norm(Xu)))
+Uaxis   = np.cross(Vdirect, Xu)/(np.sin(theta)*np.linalg.norm(Vdirect)*np.linalg.norm(Xu))
+
+Identify = np.array([[1, 0, 0],
+                     [0, 1, 0],
+                     [0, 0, 1]])
+                     
+UcrossMatrix = np.array([[0, -1*Uaxis[2], Uaxis[1]],
+                        [Uaxis[2], 0, -1*Uaxis[0]],
+                        [-1*Uaxis[1], Uaxis[0], 0]])
+                        
+
+UouterMatrix = np.outer(Uaxis, Uaxis)
+
+RotAboutUaxisMatrix = math.cos(theta)*Identify + math.sin(theta)*UcrossMatrix + (1-math.cos(theta))*UouterMatrix
+print ("Rotation matrix=\n",RotAboutUaxisMatrix)
+
+
+
 
 
 if not os.path.isdir(path):
@@ -31,9 +61,9 @@ with open("cpt_30_test_pattern.raw", "rb") as rawimg:
     BVector = colimg[:,:,2].flatten()
     
     
-    RVector = RVector[0:40]
-    GVector = GVector[0:40]
-    BVector = BVector[0:40]
+    #RVector = RVector[0:1600]
+    #GVector = GVector[0:1600]
+    #BVector = BVector[0:1600]
     RGBVector = np.vstack((RVector,GVector,BVector)).T
 
     #x = StandardScaler().fit_transform(RGBVector)
@@ -45,10 +75,11 @@ with open("cpt_30_test_pattern.raw", "rb") as rawimg:
     print(pca.components_)
     ProjectedRGB = RGBVector.dot(pca.components_.T)
     print(ProjectedRGB-principalComponents)
+    ProjectedRGB = ProjectedRGB.dot(RotAboutUaxisMatrix)
     ProjectedR = ProjectedRGB[:,0]
     ProjectedG = ProjectedRGB[:,1]
     ProjectedB = ProjectedRGB[:,2]
-
+    print(ProjectedRGB)
     
 """
 #PLOT Original RGB space
