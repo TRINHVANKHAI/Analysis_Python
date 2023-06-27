@@ -6,77 +6,90 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 import math
 
+def adjust_gamma(image, gamma=1.0):
+    # build a lookup table mapping the pixel values [0, 255] to
+    # their adjusted gamma values
+    invGamma = 1.0 / gamma
+    table = np.array([((i / 255.0) ** invGamma) * 255
+    for i in np.arange(0, 256)]).astype("uint8")
+    # apply gamma correction using the lookup table
+    return cv2.LUT(image, table)
 
 width = 1920
 height = 1080
+GroundTruth=np.array([60,102,48])
 
 path = r'C:\Users\khai\PYWORKSPACE\IMAGE_CALIB'
-image_name = 'test.jpeg'
+image_name = 'cpt_60_floor'
 image_shape = (height, width)
 
 
-pca = PCA(n_components=3)
+pca = PCA(n_components=2)
 
+def rotate_to_illumination(Illumination):
+    Vdirect = np.array([1, 1, 1]) # Target direction
+    Xu      = np.array([1, 0, 0]) # X axis unit vector #GroundTruth if not PCA
 
-Vdirect = np.array([1, 1, 1]) # Target direction
-Xu      = np.array([1, 0, 0]) # X axis unit vector
+    theta   = math.acos (np.dot(Illumination, Vdirect)/(np.linalg.norm(Vdirect)*np.linalg.norm(Illumination)))
+    Uaxis   = np.cross(Vdirect, Illumination)/(np.sin(theta)*np.linalg.norm(Vdirect)*np.linalg.norm(Illumination))
 
-theta   = math.acos (np.dot(Xu, Vdirect)/(np.linalg.norm(Vdirect)*np.linalg.norm(Xu)))
-Uaxis   = np.cross(Vdirect, Xu)/(np.sin(theta)*np.linalg.norm(Vdirect)*np.linalg.norm(Xu))
+    Identify = np.array([[1, 0, 0],
+                         [0, 1, 0],
+                         [0, 0, 1]])
+                         
+    UcrossMatrix = np.array([[0, -1*Uaxis[2], Uaxis[1]],
+                            [Uaxis[2], 0, -1*Uaxis[0]],
+                            [-1*Uaxis[1], Uaxis[0], 0]])
+                            
+    UouterMatrix = np.outer(Uaxis, Uaxis)
 
-Identify = np.array([[1, 0, 0],
-                     [0, 1, 0],
-                     [0, 0, 1]])
-                     
-UcrossMatrix = np.array([[0, -1*Uaxis[2], Uaxis[1]],
-                        [Uaxis[2], 0, -1*Uaxis[0]],
-                        [-1*Uaxis[1], Uaxis[0], 0]])
-                        
-
-UouterMatrix = np.outer(Uaxis, Uaxis)
-
-RotAboutUaxisMatrix = math.cos(theta)*Identify + math.sin(theta)*UcrossMatrix + (1-math.cos(theta))*UouterMatrix
-print ("Rotation matrix=\n",RotAboutUaxisMatrix)
-
-
-
+    RotAboutUaxisMatrix = math.cos(theta)*Identify + math.sin(theta)*UcrossMatrix + (1-math.cos(theta))*UouterMatrix
+    return RotAboutUaxisMatrix
 
 
 if not os.path.isdir(path):
     print("No such a directory: {}".format(path))
     exit(1)
 
-with open("cpt_60_floor.raw", "rb") as rawimg:
+with open(image_name+'.raw', "rb") as rawimg:
     img = np.fromfile(rawimg, dtype='>u2', count=width * height)
     img = img.reshape(image_shape)
     img = img.astype('u2')
     colimg = cv2.cvtColor(img, cv2.COLOR_BAYER_RG2RGB)
 
-    RVector = colimg[:,:,0].flatten()
-    GVector = colimg[:,:,1].flatten()
-    BVector = colimg[:,:,2].flatten()
+    RVector = colimg[:,:,0].flatten() - 120
+    GVector = colimg[:,:,1].flatten() - 120
+    BVector = colimg[:,:,2].flatten() - 120
     
-    
-    #RVector = RVector[0:1600]
-    #GVector = GVector[0:1600]
-    #BVector = BVector[0:1600]
     RGBVector = np.vstack((RVector,GVector,BVector)).T
+    RGBUnsaturated = RGBVector#np.delete(RGBVector, np.where(RGBVector>4095)[0], axis=0)
 
-    #x = StandardScaler().fit_transform(RGBVector)
-    #principalComponents = pca.fit_transform(x)
-    
-    principalComponents = pca.fit_transform(RGBVector)
-    print(principalComponents)
-    print(pca.mean_)
-    print(pca.components_)
-    ProjectedRGB = RGBVector.dot(pca.components_.T)
-    print(ProjectedRGB-principalComponents)
-    ProjectedRGB = ProjectedRGB.dot(RotAboutUaxisMatrix)
+    #Preprocessing for PCA 
+    RGBAverageVector = np.mean(RGBUnsaturated, axis=0)
+    distanceFromZero = np.dot(RGBUnsaturated, RGBAverageVector)/(np.linalg.norm(RGBAverageVector)*np.linalg.norm(RGBUnsaturated, axis=1))
+    distanceFromZeroSorted = np.sort(distanceFromZero)
+    rangeDistance=distanceFromZeroSorted.shape[0]*8/100
+    rangeDistance = int(rangeDistance)
+    maxLowRangeDistance = np.max(distanceFromZeroSorted[0:rangeDistance])
+    minHighRangeDistance = np.min(distanceFromZeroSorted[distanceFromZeroSorted.shape[0]-rangeDistance: distanceFromZeroSorted.shape[0]])
+
+    FilteredRGBVector = np.delete(RGBUnsaturated, np.where((distanceFromZero>maxLowRangeDistance) &(distanceFromZero<minHighRangeDistance)), axis=0)
+    print(distanceFromZeroSorted.shape[0], distanceFromZeroSorted)
+
+    #x = StandardScaler().fit_transform(FilteredRGBVector)
+    principalComponents = pca.fit_transform(FilteredRGBVector)
+    estimatedIlluDirect = pca.components_[0]
+    print("PCA mean:\n", pca.mean_)
+    print("PCA eigenvector \n", pca.components_)
+    print("Estimated illumination :\n", estimatedIlluDirect)
+    rotMatToIllumination = rotate_to_illumination(estimatedIlluDirect)
+    ProjectedRGB = np.dot(RGBVector, rotMatToIllumination)
+    ProjectedRGB = np.clip(ProjectedRGB, 0, 4095) #Saturated value clip
+
     ProjectedR = ProjectedRGB[:,0]
     ProjectedG = ProjectedRGB[:,1]
     ProjectedB = ProjectedRGB[:,2]
-    print(ProjectedRGB)
-    
+
 """
 #PLOT Original RGB space
 fig = plt.figure()
@@ -128,7 +141,9 @@ RestoreImage = RestoreImage.astype('u2')
 RestoreImage = RestoreImage>>4
 print (RestoreImage.shape)
 CorrectedImage = (RestoreImage).astype('u1')
-cv2.imshow("Corrected image", CorrectedImage)
-cv2.waitKey(0)
+CorrectedImage = adjust_gamma(CorrectedImage, 2.2)
+cv2.imwrite(image_name+"_output_pca.jpg", CorrectedImage)
+#cv2.imshow("Corrected image", CorrectedImage)
+#cv2.waitKey(0)
 
 
